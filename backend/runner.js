@@ -1,6 +1,14 @@
 const puppeteer = require("puppeteer");
 const { parse } = require("csv-parse/sync");
 
+const DEBUG = String(process.env.DEBUG_AUTOFILL || "").toLowerCase() === "true";
+
+function logDebug(message) {
+  if (DEBUG) {
+    console.log(`[autofill] ${message}`);
+  }
+}
+
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
@@ -35,6 +43,14 @@ function normalizeKey(value) {
     .toLowerCase();
 }
 
+function normalizeQuestionText(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^\d+\s*[.)-]?\s*/, "")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
 function generateEmail(baseNames, domain, index) {
   const safeDomain = String(domain || "example.com").trim();
   const bases = Array.isArray(baseNames) && baseNames.length > 0
@@ -60,6 +76,7 @@ function buildLaunchOptions(headless) {
     executablePath: executablePath || undefined,
     userDataDir: userDataDir || undefined,
     args,
+    timeout: 60000,
   };
 }
 
@@ -101,30 +118,28 @@ async function fillTextField(page, field, value) {
 }
 
 async function findQuestionContainer(page, questionText) {
+  const normalizedQuestion = normalizeQuestionText(questionText);
   const handle = await page.evaluateHandle(text => {
-    const makeLiteral = value => {
-      if (!value.includes('"')) {
-        return `"${value}"`;
-      }
-      if (!value.includes("'")) {
-        return `'${value}'`;
-      }
-      const parts = value.split('"').map(part => `"${part}"`);
-      return "concat(" + parts.join(", '\"', ") + ")";
-    };
+    const normalize = value =>
+      String(value || "")
+        .trim()
+        .replace(/^\d+\s*[.)-]?\s*/, "")
+        .replace(/\s+/g, " ")
+        .toLowerCase();
 
-    const literal = makeLiteral(text);
-    const xpath = `//div[@role="listitem"]//*[normalize-space()=${literal}]/ancestor::div[@role="listitem"][1]`;
-    const result = document.evaluate(
-      xpath,
-      document,
-      null,
-      XPathResult.FIRST_ORDERED_NODE_TYPE,
-      null
-    ).singleNodeValue;
+    if (!text) return null;
 
-    return result || null;
-  }, questionText);
+    const items = Array.from(document.querySelectorAll('div[role="listitem"]'));
+    for (const item of items) {
+      const label = normalize(item.innerText || item.textContent || "");
+      if (!label) continue;
+      if (label === text || label.includes(text)) {
+        return item;
+      }
+    }
+
+    return null;
+  }, normalizedQuestion);
 
   const element = handle.asElement();
   if (!element) {
@@ -256,14 +271,28 @@ async function runAutofill({ config, csvBuffer }) {
   const headless = Boolean(config.headless);
   const stopOnError = config.stopOnError !== false;
 
+  logDebug(`Launching browser (headless=${headless})`);
+
   const browser = await puppeteer.launch(buildLaunchOptions(headless));
-  const page = await browser.newPage();
+  const existingPages = await browser.pages();
+  const page = existingPages[0] || await browser.newPage();
+  for (const extra of existingPages.slice(1)) {
+    try {
+      await extra.close();
+    } catch (err) {
+      logDebug("Failed to close extra tab");
+    }
+  }
+  logDebug("Browser launched");
 
   for (let i = 0; i < submissions; i++) {
     const row = csvRows[i % Math.max(csvRows.length, 1)] || null;
     const rowValues = buildRow(fields, row, listsByKey, i + 1, emailSettings);
 
+    logDebug(`Submitting ${i + 1}/${submissions}`);
+
     await page.goto(formUrl, { waitUntil: "networkidle2" });
+    logDebug("Form loaded");
 
     for (const field of fields) {
       const value = rowValues[field.key] || null;
@@ -280,11 +309,13 @@ async function runAutofill({ config, csvBuffer }) {
       }
       console.warn(message);
     } else {
+      logDebug("Submitting form");
       await submit.click();
     }
   }
 
   await browser.close();
+  logDebug("Browser closed");
 
   return { submissions, usedCsvRows: csvRows.length };
 }

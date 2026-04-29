@@ -17,7 +17,6 @@ const defaultField = () => ({
   source: "none",
   listText: "",
   valueType: "text",
-  autoEmail: false,
 });
 
 function normalizeKey(value) {
@@ -57,7 +56,6 @@ function ensureField(field) {
     source: field.source || "none",
     listText: field.listText || "",
     valueType: field.valueType || "text",
-    autoEmail: Boolean(field.autoEmail),
   };
 }
 
@@ -104,8 +102,19 @@ export default function App() {
   const [questionCountInput, setQuestionCountInput] = useState(
     String(persisted?.questionCountInput || "")
   );
+  const [fieldCountInput, setFieldCountInput] = useState(
+    String(persisted?.fieldCountInput || "")
+  );
+  const [autoEmailEnabled, setAutoEmailEnabled] = useState(() =>
+    Boolean(
+      persisted?.autoEmailEnabled ||
+        (Array.isArray(persisted?.fields) &&
+          persisted.fields.some(field => field.autoEmail))
+    )
+  );
   const [csvFile, setCsvFile] = useState(null);
   const [status, setStatus] = useState({ type: "idle", message: "" });
+  const [dragState, setDragState] = useState({ dragId: null, overId: null });
 
   useEffect(() => {
     const payload = {
@@ -116,6 +125,8 @@ export default function App() {
       questions,
       fields,
       questionCountInput,
+      fieldCountInput,
+      autoEmailEnabled,
       emailSettings,
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
@@ -127,6 +138,8 @@ export default function App() {
     questions,
     fields,
     questionCountInput,
+    fieldCountInput,
+    autoEmailEnabled,
     emailSettings,
   ]);
 
@@ -177,6 +190,46 @@ export default function App() {
     });
   };
 
+  const addField = () => {
+    setFields(prev => [...prev, defaultField()]);
+    toast.fire({
+      icon: "success",
+      title: `Field added (${fields.length + 1})`,
+    });
+  };
+
+  const applyFieldCount = () => {
+    const target = Number(fieldCountInput);
+    if (!Number.isFinite(target) || target < 0) {
+      toast.fire({
+        icon: "warning",
+        title: "Enter a valid field count",
+      });
+      return;
+    }
+
+    setFields(prev => {
+      if (prev.length === target) return prev;
+      if (prev.length < target) {
+        const additions = Array.from(
+          { length: target - prev.length },
+          () => defaultField()
+        );
+        toast.fire({
+          icon: "success",
+          title: `Added ${additions.length} fields`,
+        });
+        return [...prev, ...additions];
+      }
+
+      toast.fire({
+        icon: "success",
+        title: `Trimmed to ${target} fields`,
+      });
+      return prev.slice(0, target);
+    });
+  };
+
   const biasLabel = useMemo(() => {
     if (bias <= 25) return "Mostly negative";
     if (bias <= 45) return "Leaning negative";
@@ -187,6 +240,7 @@ export default function App() {
 
   const readyQuestions = questions.filter(item => item.text.trim());
   const readyFields = fields.filter(item => item.label.trim());
+  const emailEnabled = autoEmailEnabled;
 
   const handleFieldLabelChange = (id, value) => {
     setFields(prev =>
@@ -202,18 +256,51 @@ export default function App() {
     );
   };
 
-  const addAmountField = () => {
-    setFields(prev => [
-      ...prev,
-      {
-        id: crypto.randomUUID(),
-        label: "Amount",
-        key: "amount",
-        source: "list",
-        listText: "",
-        valueType: "number",
-      },
-    ]);
+  const removeAllQuestions = () => {
+    setQuestions([]);
+  };
+
+  const removeAllFields = () => {
+    setFields([]);
+  };
+
+  const handleQuestionDragStart = (id, event) => {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", id);
+    setDragState({ dragId: id, overId: id });
+  };
+
+  const handleQuestionDragOver = (id, event) => {
+    event.preventDefault();
+    setDragState(prev => ({ ...prev, overId: id }));
+  };
+
+  const handleQuestionDrop = (id, event) => {
+    event.preventDefault();
+    const draggedId =
+      dragState.dragId || event.dataTransfer.getData("text/plain");
+
+    if (!draggedId || draggedId === id) {
+      setDragState({ dragId: null, overId: null });
+      return;
+    }
+
+    setQuestions(prev => {
+      const fromIndex = prev.findIndex(item => item.id === draggedId);
+      const toIndex = prev.findIndex(item => item.id === id);
+      if (fromIndex === -1 || toIndex === -1) return prev;
+
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+
+    setDragState({ dragId: null, overId: null });
+  };
+
+  const handleQuestionDragEnd = () => {
+    setDragState({ dragId: null, overId: null });
   };
 
   const runAutofill = async event => {
@@ -273,7 +360,7 @@ export default function App() {
         key: field.key,
         label: field.label,
         source: field.source,
-        autoEmail: field.autoEmail,
+        autoEmail: autoEmailEnabled,
       };
     });
 
@@ -290,7 +377,7 @@ export default function App() {
       personalFields,
       personalLists,
       emailSettings: {
-        enabled: emailSettings.enabled,
+        enabled: emailEnabled,
         baseNames: splitOptions(emailSettings.baseNamesText),
         domain: emailSettings.domain,
       },
@@ -421,27 +508,57 @@ export default function App() {
                 <button className="ghost" type="button" onClick={addQuestion}>
                   Add question
                 </button>
+                <button className="ghost danger" type="button" onClick={removeAllQuestions}>
+                  Remove all
+                </button>
               </div>
             </div>
 
             <div className="stack">
               {questions.map((question, index) => (
-                <div key={question.id} className="card">
+                <div
+                  key={question.id}
+                  className={`card${
+                    dragState.dragId === question.id ? " dragging" : ""
+                  }${
+                    dragState.overId === question.id &&
+                    dragState.dragId !== question.id
+                      ? " drag-over"
+                      : ""
+                  }`}
+                  onDragOver={event => handleQuestionDragOver(question.id, event)}
+                  onDrop={event => handleQuestionDrop(question.id, event)}
+                >
                   <div className="card-header">
                     <h3>Question {index + 1}</h3>
-                    {questions.length > 1 && (
+                    <div className="card-actions">
                       <button
-                        className="ghost danger"
+                        className="drag-handle"
                         type="button"
-                        onClick={() =>
-                          setQuestions(prev =>
-                            prev.filter(item => item.id !== question.id)
-                          )
+                        draggable
+                        onDragStart={event =>
+                          handleQuestionDragStart(question.id, event)
                         }
+                        onDragEnd={handleQuestionDragEnd}
+                        aria-label={`Drag question ${index + 1}`}
+                        title="Drag to reorder"
                       >
-                        Remove
+                        ::
                       </button>
-                    )}
+                      {questions.length > 1 && (
+                        <button
+                          className="ghost danger"
+                          type="button"
+                          onClick={() =>
+                            setQuestions(prev =>
+                              prev.filter(item => item.id !== question.id)
+                            )
+                          }
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <label className="field">
                     <span>Question text</span>
@@ -512,15 +629,32 @@ export default function App() {
                 </p>
               </div>
               <div className="panel-actions">
-                <button
-                  className="ghost"
-                  type="button"
-                  onClick={() => setFields(prev => [...prev, defaultField()])}
-                >
+                <div className="count-field">
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    placeholder="Count"
+                    value={fieldCountInput}
+                    onChange={event => setFieldCountInput(event.target.value)}
+                  />
+                  <button className="ghost" type="button" onClick={applyFieldCount}>
+                    Set count
+                  </button>
+                </div>
+                <label className="toggle inline">
+                  <input
+                    type="checkbox"
+                    checked={autoEmailEnabled}
+                    onChange={event => setAutoEmailEnabled(event.target.checked)}
+                  />
+                  <span>Auto-generate email if missing</span>
+                </label>
+                <button className="ghost" type="button" onClick={addField}>
                   Add field
                 </button>
-                <button className="ghost" type="button" onClick={addAmountField}>
-                  Add amount
+                <button className="ghost danger" type="button" onClick={removeAllFields}>
+                  Remove all
                 </button>
               </div>
             </div>
@@ -591,22 +725,6 @@ export default function App() {
                       <option value="number">Number</option>
                     </select>
                   </label>
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={field.autoEmail}
-                      onChange={event =>
-                        setFields(prev =>
-                          prev.map(item =>
-                            item.id === field.id
-                              ? { ...item, autoEmail: event.target.checked }
-                              : item
-                          )
-                        )
-                      }
-                    />
-                    <span>Auto-generate email if missing</span>
-                  </label>
                   {field.source === "list" && (
                     <label className="field">
                       <span>
@@ -645,31 +763,17 @@ export default function App() {
             </label>
           </section>
 
-          <section className="panel stagger" style={{ "--delay": "270ms" }}>
-            <div className="panel-header">
-              <div>
-                <h2>Email generator</h2>
-                <p className="hint">
-                  Used only for fields where auto-generate is enabled.
-                </p>
+          {emailEnabled && (
+            <section className="panel stagger" style={{ "--delay": "270ms" }}>
+              <div className="panel-header">
+                <div>
+                  <h2>Email generator</h2>
+                  <p className="hint">
+                    Used only for fields where auto-generate is enabled.
+                  </p>
+                </div>
               </div>
-            </div>
 
-            <label className="toggle">
-              <input
-                type="checkbox"
-                checked={emailSettings.enabled}
-                onChange={event =>
-                  setEmailSettings(prev => ({
-                    ...prev,
-                    enabled: event.target.checked,
-                  }))
-                }
-              />
-              <span>Enable email generator</span>
-            </label>
-
-            {emailSettings.enabled && (
               <div className="stack">
                 <label className="field">
                   <span>Base names (comma or new line)</span>
@@ -700,8 +804,8 @@ export default function App() {
                   />
                 </label>
               </div>
-            )}
-          </section>
+            </section>
+          )}
 
           <section className="panel action stagger" style={{ "--delay": "300ms" }}>
             <button className="primary" type="submit" disabled={status.type === "loading"}>

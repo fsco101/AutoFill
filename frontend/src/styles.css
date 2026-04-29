@@ -176,6 +176,13 @@ body {
   font-weight: 600;
 }
 
+.toggle.inline {
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.6);
+}
+
 .toggle input {
   width: 18px;
   height: 18px;
@@ -199,6 +206,39 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.drag-handle {
+  border: 1px dashed rgba(148, 163, 184, 0.8);
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 10px;
+  padding: 6px 10px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  cursor: grab;
+  color: var(--muted);
+  transition: border-color 0.2s ease, color 0.2s ease, transform 0.2s ease;
+}
+
+.drag-handle:hover {
+  color: var(--ink);
+  border-color: rgba(14, 165, 164, 0.6);
+  transform: translateY(-1px);
+}
+
+.card.dragging {
+  opacity: 0.6;
+}
+
+.card.drag-over {
+  border-color: rgba(14, 165, 164, 0.6);
+  box-shadow: 0 22px 38px rgba(14, 165, 164, 0.16);
 }
 
 .card-header h3 {
